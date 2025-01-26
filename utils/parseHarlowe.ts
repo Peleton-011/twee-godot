@@ -14,11 +14,10 @@ import {
 
 // Define token types
 enum TokenKind {
-	Macro,
+	MacroName,
 	Variable,
 	HookOpen,
 	HookClose,
-	Text,
 	StringLiteral,
 	Number,
 	Boolean,
@@ -29,16 +28,14 @@ enum TokenKind {
 	LParen,
 	RParen,
 	Whitespace,
-	MacroName,
-	MacroArgument,
+	Text,
 	Newline,
 	EOF,
 }
 
 const tokenizer = buildLexer([
-	[true, /^\(\w+:/g, TokenKind.MacroName], // Captures (set:, (if:, (print:
-	[true, /^[^\)\(]+/g, TokenKind.MacroArgument], // Captures everything inside macros
-	[true, /^\)/g, TokenKind.RParen], // Captures macro closing `)`
+	[true, /^\(\w+:/g, TokenKind.MacroName], // Macros like (set:, (if:, (print:
+	[true, /^\)/g, TokenKind.RParen], // Macro closing `)`
 	[true, /^\$[a-zA-Z_][a-zA-Z0-9_-]*/g, TokenKind.Variable], // Variables like $var
 	[true, /^\"[^\"]*\"/g, TokenKind.StringLiteral], // Strings "Hello"
 	[true, /^\d+(\.\d+)?/g, TokenKind.Number], // Numbers
@@ -61,7 +58,7 @@ const MACRO = rule<TokenKind, any>(); // Macro Parsing Rule
 const VALUE = rule<TokenKind, any>(); // Value Parsing Rule
 const LIST = rule<TokenKind, any>(); // List Parsing Rule
 
-// Basic Value Parsers
+// **Basic Value Parsers**
 VALUE.setPattern(
 	alt(
 		apply(tok(TokenKind.StringLiteral), (t) => ({
@@ -87,65 +84,38 @@ VALUE.setPattern(
 	)
 );
 
-// Macro Parser: (set: $var to "value")
+// **List Parsing: Handles Macros, Values, and Expressions**
+LIST.setPattern(list_sc(alt(MACRO, VALUE), tok(TokenKind.Comma)));
+
+// **Macro Parser: (set: $var to "value")**
 MACRO.setPattern(
 	apply(
 		seq(
 			tok(TokenKind.MacroName),
-			tok(TokenKind.MacroArgument),
+			LIST, // Recursively parse macro arguments
 			tok(TokenKind.RParen)
 		),
-		([macroName, macroArgs]) => {
+		([macroName, args]) => {
+			const macroNames = macroName.text.match(/\((\w+):/) || [null];
 			return {
 				type: "Macro",
-				name: macroName.text.slice(1, -1), // Extract name (remove `(` and `:`)
-				args: macroArgs.text
-					.trim()
-					.split(/\s+/)
-					.map((arg) => {
-						if (arg.startsWith('"') && arg.endsWith('"')) {
-							return { type: "String", value: arg.slice(1, -1) };
-						} else if (arg.startsWith("$")) {
-							return { type: "Variable", name: arg.slice(1) };
-						} else if (!isNaN(parseFloat(arg))) {
-							return { type: "Number", value: parseFloat(arg) };
-						}
-						return { type: "Text", content: arg };
-					}),
+				name: macroNames[1], // Extract macro name
+				args,
 			};
 		}
 	)
 );
 
-// List Parsing: Handles Macros, Values, and Expressions
-LIST.setPattern(
-	list_sc(
-		alt(
-			MACRO,
-			VALUE,
-			apply(tok(TokenKind.Text), (t) => ({
-				type: "Text",
-				content: t.text.trim(),
-			}))
-		),
-		tok(TokenKind.Comma)
-	)
-);
-
-// Expression Parsing (Handles Hooks, Expressions, and Nested Structures)
+// **Expression Parsing (Handles Hooks, Expressions, and Nested Structures)**
 EXP.setPattern(
-	list_sc(
-		// Fix: Use `list_sc()` to handle multiple lines
-		alt(
-			MACRO,
-			VALUE,
-			kmid(str("["), LIST, str("]")) // Hooks like [some content]
-		),
-		str("") // Ensures continuation across newlines
+	alt(
+		MACRO,
+		VALUE,
+		kmid(str("["), LIST, str("]")) // Hooks like [some content]
 	)
 );
 
-// Final Parse Function
+// **Final Parse Function**
 function parseHarlowe(input: string) {
 	const tokens = tokenizer.parse(input);
 
@@ -157,8 +127,9 @@ function parseHarlowe(input: string) {
 	return expectSingleResult(expectEOF(EXP.parse(tokens)));
 }
 
-// 🧪 Test Cases
-const harloweCode = `(set: $name to "John")
+// **🧪 Test Cases**
+const harloweCode = `
+(set: $name to "John Doe")
 (if: $score > 10)[You win!]
 (link: "Next" -> "NextPassage")
 (a: 1, 2, 3)
