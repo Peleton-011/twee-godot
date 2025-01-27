@@ -35,15 +35,15 @@ enum TokenKind {
 	To,
 	Whitespace,
 	Text,
-	HookContent, // New token type for hook content
+	HookContent,
 }
 
 const tokenizer = buildLexer([
-	[true, /^\(\w+:/g, TokenKind.MacroName],
+	[true, /^\([a-zA-Z0-9_-]+:/g, TokenKind.MacroName], // Modified to allow more macro names
 	[true, /^\)/g, TokenKind.RParen],
 	[true, /^\$[a-zA-Z_][a-zA-Z0-9_-]*/g, TokenKind.Variable],
 	[true, /^\"[^\"]*\"/g, TokenKind.StringLiteral],
-	[true, /^\d+(\.\d+)?s\b/g, TokenKind.Time], // Add time unit pattern before number
+	[true, /^\d+(\.\d+)?s\b/g, TokenKind.Time],
 	[true, /^\d+(\.\d+)?/g, TokenKind.Number],
 	[true, /^(true|false)/g, TokenKind.Boolean],
 	[true, /^->/g, TokenKind.Arrow],
@@ -58,12 +58,10 @@ const tokenizer = buildLexer([
 	[true, /^\]/g, TokenKind.HookClose],
 	[true, /^,/g, TokenKind.Comma],
 	[false, /^\s+/g, TokenKind.Whitespace],
-	// Special handling for hook content - capture everything between [ and ]
 	[true, /^\[[^\]]*\]/g, TokenKind.HookContent],
 	[true, /^[^\[\]\(\)$,\s><="']+/g, TokenKind.Text],
 ]);
 
-// Basic value types
 const LITERAL = rule<TokenKind, any>();
 LITERAL.setPattern(
 	alt(
@@ -90,7 +88,6 @@ LITERAL.setPattern(
 	)
 );
 
-// Hook content now captures everything between brackets
 const HOOK_CONTENT = rule<TokenKind, any>();
 HOOK_CONTENT.setPattern(
 	apply(
@@ -101,8 +98,9 @@ HOOK_CONTENT.setPattern(
 					apply(tok(TokenKind.Text), (t) => t.text),
 					apply(tok(TokenKind.Whitespace), (t) => t.text),
 					apply(tok(TokenKind.StringLiteral), (t) => t.text),
-					apply(tok(TokenKind.Variable), (t) => t.text)
-					// Add other token types that can appear in hook content
+					apply(tok(TokenKind.Variable), (t) => t.text),
+					apply(tok(TokenKind.MacroName), (t) => t.text), // Allow nested macros
+					apply(tok(TokenKind.RParen), (t) => t.text)
 				)
 			),
 			tok(TokenKind.HookClose)
@@ -114,11 +112,9 @@ HOOK_CONTENT.setPattern(
 	)
 );
 
-// Term can be either a literal or a parenthesized expression
 const TERM = rule<TokenKind, any>();
 TERM.setPattern(LITERAL);
 
-// Arithmetic expression with proper precedence
 const ARITHMETIC_EXPR = rule<TokenKind, any>();
 ARITHMETIC_EXPR.setPattern(
 	apply(
@@ -136,7 +132,6 @@ ARITHMETIC_EXPR.setPattern(
 	)
 );
 
-// Comparative expression
 const COMPARATIVE_EXPR = rule<TokenKind, any>();
 COMPARATIVE_EXPR.setPattern(
 	apply(
@@ -150,11 +145,9 @@ COMPARATIVE_EXPR.setPattern(
 	)
 );
 
-// Expression can be either comparative or arithmetic
 const EXPRESSION = rule<TokenKind, any>();
 EXPRESSION.setPattern(alt(COMPARATIVE_EXPR, ARITHMETIC_EXPR));
 
-// Keyword argument
 const KEYWORD_ARG = rule<TokenKind, any>();
 KEYWORD_ARG.setPattern(
 	apply(
@@ -172,16 +165,14 @@ KEYWORD_ARG.setPattern(
 	)
 );
 
-// Hook content parser
 const HOOK = rule<TokenKind, any>();
 HOOK.setPattern(
 	apply(tok(TokenKind.HookContent), (token) => ({
 		type: "Hook",
-		content: token.text.slice(1, -1), // Remove the [ and ]
+		content: token.text.slice(1, -1),
 	}))
 );
 
-// Macro argument can be either a keyword argument or a regular expression
 const MACRO_ARG = rule<TokenKind, any>();
 MACRO_ARG.setPattern(alt(KEYWORD_ARG, EXPRESSION));
 
@@ -207,10 +198,22 @@ const MACRO_ARG_PATTERNS = {
 		keyword: null,
 	},
 	dm: {
-		pattern: ["Expression"],
+		pattern: ["Expression", "Expression", "Expression", "Expression"], // Handle multiple key-value pairs
 		keyword: null,
 	},
 	live: {
+		pattern: ["Expression"],
+		keyword: null,
+	},
+	history: {
+		pattern: [],
+		keyword: null,
+	},
+	visited: {
+		pattern: ["Expression"],
+		keyword: null,
+	},
+	m: {
 		pattern: ["Expression"],
 		keyword: null,
 	},
@@ -223,12 +226,14 @@ MACRO.setPattern(
 	apply(
 		seq(
 			tok(TokenKind.MacroName),
-			list_sc(MACRO_ARG, tok(TokenKind.Comma)),
+			opt(list_sc(MACRO_ARG, tok(TokenKind.Comma))), // Make arguments optional
 			tok(TokenKind.RParen),
 			opt(HOOK)
 		),
 		([macroName, args, _, hookContent]) => {
-			const macroNames = macroName.text.match(/\((\w+):/) || [null];
+			const macroNames = macroName.text.match(/\(([a-zA-Z0-9_-]+):/) || [
+				null,
+			];
 			const name = macroNames[1] as MacroType;
 			const macroPattern = MACRO_ARG_PATTERNS[name];
 
@@ -243,7 +248,7 @@ MACRO.setPattern(
 			return {
 				type: "Macro",
 				name,
-				args,
+				args: args || [],
 				pattern: macroPattern.pattern,
 				hookContent: hookContent || null,
 			};
@@ -275,4 +280,4 @@ function parseHarlowe(input: string) {
 	}
 }
 
-export default parseHarlowe ;
+export default parseHarlowe;
