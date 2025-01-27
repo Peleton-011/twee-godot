@@ -11,6 +11,7 @@ import {
 	str,
 	list_sc,
 	opt,
+	rep,
 } from "typescript-parsec";
 
 enum TokenKind {
@@ -33,7 +34,6 @@ enum TokenKind {
 	Text,
 }
 
-// Split keywords into separate tokens
 const tokenizer = buildLexer([
 	[true, /^\(\w+:/g, TokenKind.MacroName],
 	[true, /^\)/g, TokenKind.RParen],
@@ -41,8 +41,8 @@ const tokenizer = buildLexer([
 	[true, /^\"[^\"]*\"/g, TokenKind.StringLiteral],
 	[true, /^\d+(\.\d+)?/g, TokenKind.Number],
 	[true, /^(true|false)/g, TokenKind.Boolean],
-	[true, /^->/g, TokenKind.Arrow], // Separate token for ->
-	[true, /^to\b/g, TokenKind.To], // Separate token for 'to'
+	[true, /^->/g, TokenKind.Arrow],
+	[true, /^to\b/g, TokenKind.To],
 	[true, /^[\+\-\*\/=<>!]+/g, TokenKind.Operator],
 	[true, /^'s|its|of/g, TokenKind.PropertyAccess],
 	[true, /^bind|2bind/g, TokenKind.Binding],
@@ -67,6 +67,18 @@ const MACRO_ARG_PATTERNS = {
 		keyword: null,
 	},
 	print: {
+		pattern: ["Value"],
+		keyword: null,
+	},
+	a: {
+		pattern: ["Value"],
+		keyword: null,
+	},
+	dm: {
+		pattern: ["Value"],
+		keyword: null,
+	},
+	live: {
 		pattern: ["Value"],
 		keyword: null,
 	},
@@ -107,11 +119,14 @@ VALUE.setPattern(
 		apply(tok(TokenKind.Variable), (t) => ({
 			type: "Variable",
 			name: t.text.slice(1),
+		})),
+		apply(tok(TokenKind.Text), (t) => ({
+			type: "Text",
+			content: t.text.trim(),
 		}))
 	)
 );
 
-// Modified to handle both 'to' and '->' keywords
 const KEYWORD = rule<TokenKind, TokenKind>();
 KEYWORD.setPattern(
 	alt(
@@ -130,8 +145,16 @@ STRUCTURED_ARG.setPattern(
 	}))
 );
 
-const SIMPLE_ARG = rule<TokenKind, any>();
-SIMPLE_ARG.setPattern(VALUE);
+const HOOK_CONTENT = rule<TokenKind, any>();
+HOOK_CONTENT.setPattern(
+	apply(
+		seq(tok(TokenKind.HookOpen), VALUE, tok(TokenKind.HookClose)),
+		([_, content]) => ({
+			type: "HookContent",
+			content,
+		})
+	)
+);
 
 const MACRO = rule<TokenKind, any>();
 MACRO.setPattern(
@@ -140,17 +163,23 @@ MACRO.setPattern(
 			tok(TokenKind.MacroName),
 			alt(
 				apply(STRUCTURED_ARG, (arg) => [arg]),
-				list_sc(SIMPLE_ARG, tok(TokenKind.Comma))
+				list_sc(VALUE, tok(TokenKind.Comma))
 			),
-			tok(TokenKind.RParen)
+			tok(TokenKind.RParen),
+			opt(HOOK_CONTENT)
 		),
-		([macroName, args]) => {
+		([macroName, args, _, hookContent]) => {
 			const macroNames = macroName.text.match(/\((\w+):/) || [null];
 			const name = macroNames[1] as MacroType;
 			const macroPattern = MACRO_ARG_PATTERNS[name];
 
 			if (!macroPattern) {
-				throw new Error(`Unknown macro type: ${name}`);
+				// Instead of throwing, return unknown macro
+				return {
+					type: "UnknownMacro",
+					name,
+					rawContent: macroName.text,
+				};
 			}
 
 			if (args[0]?.type === "StructuredArg") {
@@ -171,6 +200,7 @@ MACRO.setPattern(
 					name,
 					args: [structuredArg.firstPart, structuredArg.secondPart],
 					pattern: macroPattern.pattern,
+					hookContent: hookContent || null,
 				};
 			}
 
@@ -179,13 +209,39 @@ MACRO.setPattern(
 				name,
 				args,
 				pattern: macroPattern.pattern,
+				hookContent: hookContent || null,
 			};
 		}
 	)
 );
 
-const EXP = rule<TokenKind, any>();
-EXP.setPattern(MACRO);
+// Expression can be either a macro or plain text
+const EXPRESSION = rule<TokenKind, any>();
+EXPRESSION.setPattern(
+	alt(
+		MACRO,
+		apply(VALUE, (value) => ({
+			type: "Text",
+			content: value,
+		}))
+	)
+);
+
+// Program is a sequence of expressions
+const PROGRAM = rule<TokenKind, any>();
+PROGRAM.setPattern(
+	apply(rep(EXPRESSION), (expressions) => ({
+		type: "Program",
+		expressions: expressions.filter(
+			(exp) =>
+				// Filter out empty text nodes
+				!(
+					exp.type === "Text" &&
+					(!exp.content || exp.content.content === "")
+				)
+		),
+	}))
+);
 
 function parseHarlowe(input: string) {
 	try {
@@ -193,7 +249,7 @@ function parseHarlowe(input: string) {
 		if (!tokens) {
 			throw new Error("Tokenization failed");
 		}
-		return expectSingleResult(expectEOF(EXP.parse(tokens)));
+		return expectSingleResult(expectEOF(PROGRAM.parse(tokens)));
 	} catch (error: unknown) {
 		if (error instanceof Error) {
 			throw new Error(`Error parsing: ${input}, error: ${error.message}`);
@@ -210,6 +266,17 @@ function runTests() {
 		'(link: "Next" -> "NextPassage")',
 		"(if: $condition)",
 		'(print: "Hello")',
+		'(if: $condition) (print: "Hello")',
+		`(if: $condition) 
+        (print: "Hello")`,
+		`(set: $name to "John Doe")
+(if: $score > 10)[You win!]
+(link: "Next" -> "NextPassage")
+(a: 1, 2, 3)
+(dm: "name", "John", "score", 10)
+(live: 2s)[Time is running!]
+(print: "Your score is " + $score)
+`,
 	];
 
 	tests.forEach((test) => {
