@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import { ref } from "vue";
 import parseHarlowe from "../utils/parseHarlowe.ts";
-import { runTests } from "../tests/tests.ts";
+import { runTests, altTests, mainTests } from "../tests/tests.ts";
 
 const harloweCode = ref("");
 const outputJson = ref({});
 
-runTests();
+runTests(altTests);
+runTests(mainTests);
 
 function updateHarloweCode(event: Event) {
 	harloweCode.value = (event.target as HTMLInputElement).value;
