@@ -34,6 +34,7 @@ enum TokenKind {
 	To,
 	Whitespace,
 	Text,
+	HookContent, // New token type for hook content
 }
 
 const tokenizer = buildLexer([
@@ -45,9 +46,9 @@ const tokenizer = buildLexer([
 	[true, /^(true|false)/g, TokenKind.Boolean],
 	[true, /^->/g, TokenKind.Arrow],
 	[true, /^to\b/g, TokenKind.To],
-	[true, /^(>=|<=|>|<)/g, TokenKind.ComparisonOp], // Moved up and simplified
+	[true, /^(>=|<=|>|<)/g, TokenKind.ComparisonOp],
 	[true, /^(is not|is|contains|does not contain)\b/g, TokenKind.ComparisonOp],
-	[true, /^(\+|\-|\*|\/)/g, TokenKind.ArithmeticOp], // Removed \b
+	[true, /^(\+|\-|\*|\/)/g, TokenKind.ArithmeticOp],
 	[true, /^(and|or)\b/g, TokenKind.LogicalOp],
 	[true, /^'s|its|of/g, TokenKind.PropertyAccess],
 	[true, /^bind|2bind/g, TokenKind.Binding],
@@ -55,7 +56,9 @@ const tokenizer = buildLexer([
 	[true, /^\]/g, TokenKind.HookClose],
 	[true, /^,/g, TokenKind.Comma],
 	[false, /^\s+/g, TokenKind.Whitespace],
-	[true, /^[^\[\]\(\)$,\s><="']+/g, TokenKind.Text], // Updated to exclude comparison chars
+	// Special handling for hook content - capture everything between [ and ]
+	[true, /^\[[^\]]*\]/g, TokenKind.HookContent],
+	[true, /^[^\[\]\(\)$,\s><="']+/g, TokenKind.Text],
 ]);
 
 // Basic value types
@@ -139,6 +142,15 @@ KEYWORD_ARG.setPattern(
 	)
 );
 
+// Hook content parser
+const HOOK = rule<TokenKind, any>();
+HOOK.setPattern(
+	apply(tok(TokenKind.HookContent), (token) => ({
+		type: "Hook",
+		content: token.text.slice(1, -1), // Remove the [ and ]
+	}))
+);
+
 // Macro argument can be either a keyword argument or a regular expression
 const MACRO_ARG = rule<TokenKind, any>();
 MACRO_ARG.setPattern(alt(KEYWORD_ARG, EXPRESSION));
@@ -176,17 +188,6 @@ const MACRO_ARG_PATTERNS = {
 
 type MacroType = keyof typeof MACRO_ARG_PATTERNS;
 
-const HOOK_CONTENT = rule<TokenKind, any>();
-HOOK_CONTENT.setPattern(
-	apply(
-		seq(tok(TokenKind.HookOpen), EXPRESSION, tok(TokenKind.HookClose)),
-		([_, content]) => ({
-			type: "HookContent",
-			content,
-		})
-	)
-);
-
 const MACRO = rule<TokenKind, any>();
 MACRO.setPattern(
 	apply(
@@ -194,7 +195,7 @@ MACRO.setPattern(
 			tok(TokenKind.MacroName),
 			list_sc(MACRO_ARG, tok(TokenKind.Comma)),
 			tok(TokenKind.RParen),
-			opt(HOOK_CONTENT)
+			opt(HOOK)
 		),
 		([macroName, args, _, hookContent]) => {
 			const macroNames = macroName.text.match(/\((\w+):/) || [null];
