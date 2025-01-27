@@ -31,6 +31,7 @@ enum TokenKind {
 	Text,
 	Newline,
 	EOF,
+	Keyword,
 }
 
 const tokenizer = buildLexer([
@@ -41,6 +42,7 @@ const tokenizer = buildLexer([
 	[true, /^\d+(\.\d+)?/g, TokenKind.Number], // Numbers
 	[true, /^(true|false)/g, TokenKind.Boolean], // Booleans
 	[true, /^[\+\-\*\/=<>!]+/g, TokenKind.Operator], // Operators
+	[true, /^to|into|->/g, TokenKind.Keyword], // Keywords inside macros
 	[true, /^'s|its|of/g, TokenKind.PropertyAccess], // Property accessors
 	[true, /^bind|2bind/g, TokenKind.Binding], // Bind operators
 	[true, /^\[/g, TokenKind.HookOpen], // Hook open `[`
@@ -76,6 +78,10 @@ VALUE.setPattern(
 		apply(tok(TokenKind.Variable), (t) => ({
 			type: "Variable",
 			name: t.text.slice(1),
+		})),
+		apply(tok(TokenKind.Keyword), (t) => ({
+			type: "Keyword",
+			value: t.text,
 		})),
 		apply(tok(TokenKind.Text), (t) => ({
 			type: "Text",
@@ -130,12 +136,6 @@ function parseHarlowe(input: string) {
 // **🧪 Test Cases**
 const harloweCode = `
 (set: $name to "John Doe")
-(if: $score > 10)[You win!]
-(link: "Next" -> "NextPassage")
-(a: 1, 2, 3)
-(dm: "name", "John", "score", 10)
-(live: 2s)[Time is running!]
-(print: "Your score is " + $score)
 `;
 
 const parsedJSON = parseHarlowe(harloweCode);
