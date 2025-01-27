@@ -61,14 +61,9 @@ const tokenizer = buildLexer([
 	[true, /^[^\[\]\(\)$,\s]+/g, TokenKind.Text],
 ]);
 
-// Expression Rules
-const EXPRESSION = rule<TokenKind, any>();
-const COMPARATIVE_EXPR = rule<TokenKind, any>();
-const ARITHMETIC_EXPR = rule<TokenKind, any>();
-
-// Value parser with support for arithmetic expressions
-const VALUE = rule<TokenKind, any>();
-VALUE.setPattern(
+// Basic value types
+const LITERAL = rule<TokenKind, any>();
+LITERAL.setPattern(
 	alt(
 		apply(tok(TokenKind.StringLiteral), (t) => ({
 			type: "String",
@@ -85,15 +80,19 @@ VALUE.setPattern(
 		apply(tok(TokenKind.Variable), (t) => ({
 			type: "Variable",
 			name: t.text.slice(1),
-		})),
-		ARITHMETIC_EXPR
+		}))
 	)
 );
 
-// Arithmetic expression parser
+// Term can be either a literal or a parenthesized expression
+const TERM = rule<TokenKind, any>();
+TERM.setPattern(LITERAL);
+
+// Arithmetic expression with proper precedence
+const ARITHMETIC_EXPR = rule<TokenKind, any>();
 ARITHMETIC_EXPR.setPattern(
 	apply(
-		seq(VALUE, opt(seq(tok(TokenKind.ArithmeticOp), VALUE))),
+		seq(TERM, opt(seq(tok(TokenKind.ArithmeticOp), TERM))),
 		([left, rightOpt]) => {
 			if (!rightOpt) return left;
 			const [op, right] = rightOpt;
@@ -107,10 +106,11 @@ ARITHMETIC_EXPR.setPattern(
 	)
 );
 
-// Comparative expression parser
+// Comparative expression
+const COMPARATIVE_EXPR = rule<TokenKind, any>();
 COMPARATIVE_EXPR.setPattern(
 	apply(
-		seq(VALUE, tok(TokenKind.ComparisonOp), VALUE),
+		seq(ARITHMETIC_EXPR, tok(TokenKind.ComparisonOp), ARITHMETIC_EXPR),
 		([left, op, right]) => ({
 			type: "ComparisonExpr",
 			operator: op.text,
@@ -120,92 +120,69 @@ COMPARATIVE_EXPR.setPattern(
 	)
 );
 
-// Expression can be either comparative or value
-EXPRESSION.setPattern(alt(COMPARATIVE_EXPR, VALUE));
+// Expression can be either comparative or arithmetic
+const EXPRESSION = rule<TokenKind, any>();
+EXPRESSION.setPattern(alt(COMPARATIVE_EXPR, ARITHMETIC_EXPR));
+
+// Keyword argument
+const KEYWORD_ARG = rule<TokenKind, any>();
+KEYWORD_ARG.setPattern(
+	apply(
+		seq(
+			EXPRESSION,
+			alt(tok(TokenKind.To), tok(TokenKind.Arrow)),
+			EXPRESSION
+		),
+		([left, keyword, right]) => ({
+			type: "KeywordArg",
+			keyword: keyword.kind === TokenKind.To ? "to" : "->",
+			left,
+			right,
+		})
+	)
+);
+
+// Macro argument can be either a keyword argument or a regular expression
+const MACRO_ARG = rule<TokenKind, any>();
+MACRO_ARG.setPattern(alt(KEYWORD_ARG, EXPRESSION));
 
 const MACRO_ARG_PATTERNS = {
 	set: {
-		pattern: ["Variable", "Keyword", "Value"],
-		keyword: TokenKind.To,
+		pattern: ["KeywordArg"],
+		keyword: "to",
 	},
 	link: {
-		pattern: ["StringLiteral", "Keyword", "StringLiteral"],
-		keyword: TokenKind.Arrow,
+		pattern: ["KeywordArg"],
+		keyword: "->",
 	},
 	if: {
 		pattern: ["Expression"],
 		keyword: null,
 	},
 	print: {
-		pattern: ["Value"],
+		pattern: ["Expression"],
 		keyword: null,
 	},
 	a: {
-		pattern: ["Value"],
+		pattern: ["Expression"],
 		keyword: null,
 	},
 	dm: {
-		pattern: ["Value"],
+		pattern: ["Expression"],
 		keyword: null,
 	},
 	live: {
-		pattern: ["Value"],
+		pattern: ["Expression"],
 		keyword: null,
 	},
 } as const;
 
 type MacroType = keyof typeof MACRO_ARG_PATTERNS;
 
-function validateArgType(arg: any, expectedType: string): boolean {
-	switch (expectedType) {
-		case "Variable":
-			return arg.type === "Variable";
-		case "StringLiteral":
-			return arg.type === "String";
-		case "Value":
-			return [
-				"String",
-				"Number",
-				"Boolean",
-				"Variable",
-				"ArithmeticExpr",
-			].includes(arg.type);
-		case "Expression":
-			return [
-				"String",
-				"Number",
-				"Boolean",
-				"Variable",
-				"ComparisonExpr",
-				"ArithmeticExpr",
-			].includes(arg.type);
-		default:
-			return true;
-	}
-}
-
-const KEYWORD = rule<TokenKind, TokenKind>();
-KEYWORD.setPattern(
-	alt(
-		apply(tok(TokenKind.Arrow), () => TokenKind.Arrow),
-		apply(tok(TokenKind.To), () => TokenKind.To)
-	)
-);
-
-const STRUCTURED_ARG = rule<TokenKind, any>();
-STRUCTURED_ARG.setPattern(
-	apply(seq(VALUE, KEYWORD, VALUE), ([firstValue, keyword, secondValue]) => ({
-		type: "StructuredArg",
-		firstPart: firstValue,
-		keyword: keyword === TokenKind.Arrow ? "->" : "to",
-		secondPart: secondValue,
-	}))
-);
-
 const HOOK_CONTENT = rule<TokenKind, any>();
 HOOK_CONTENT.setPattern(
 	apply(
-		seq(tok(TokenKind.HookOpen), VALUE, tok(TokenKind.HookClose)),
+		seq(tok(TokenKind.HookOpen), EXPRESSION, tok(TokenKind.HookClose)),
 		([_, content]) => ({
 			type: "HookContent",
 			content,
@@ -218,10 +195,7 @@ MACRO.setPattern(
 	apply(
 		seq(
 			tok(TokenKind.MacroName),
-			alt(
-				apply(STRUCTURED_ARG, (arg) => [arg]),
-				list_sc(EXPRESSION, tok(TokenKind.Comma))
-			),
+			list_sc(MACRO_ARG, tok(TokenKind.Comma)),
 			tok(TokenKind.RParen),
 			opt(HOOK_CONTENT)
 		),
@@ -238,26 +212,17 @@ MACRO.setPattern(
 				};
 			}
 
-			if (args[0]?.type === "StructuredArg") {
-				const structuredArg = args[0];
-				const keywordType =
-					structuredArg.keyword === "->"
-						? TokenKind.Arrow
-						: TokenKind.To;
-
-				if (keywordType !== macroPattern.keyword) {
+			// Validate keyword arguments if required
+			if (macroPattern.keyword) {
+				const arg = args[0];
+				if (
+					arg.type !== "KeywordArg" ||
+					arg.keyword !== macroPattern.keyword
+				) {
 					throw new Error(
-						`Expected keyword '${macroPattern.keyword}' but got '${structuredArg.keyword}'`
+						`Macro ${name} requires keyword ${macroPattern.keyword}`
 					);
 				}
-
-				return {
-					type: "Macro",
-					name,
-					args: [structuredArg.firstPart, structuredArg.secondPart],
-					pattern: macroPattern.pattern,
-					hookContent: hookContent || null,
-				};
 			}
 
 			return {
