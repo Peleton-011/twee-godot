@@ -23,7 +23,9 @@ enum TokenKind {
 	Number,
 	Boolean,
 	Comma,
-	Operator,
+	ComparisonOp,
+	ArithmeticOp,
+	LogicalOp,
 	PropertyAccess,
 	Binding,
 	LParen,
@@ -43,7 +45,13 @@ const tokenizer = buildLexer([
 	[true, /^(true|false)/g, TokenKind.Boolean],
 	[true, /^->/g, TokenKind.Arrow],
 	[true, /^to\b/g, TokenKind.To],
-	[true, /^[\+\-\*\/=<>!]+/g, TokenKind.Operator],
+	[
+		true,
+		/^(>=|<=|>|<|is not|is|contains|does not contain)\b/g,
+		TokenKind.ComparisonOp,
+	],
+	[true, /^(\+|\-|\*|\/)\b/g, TokenKind.ArithmeticOp],
+	[true, /^(and|or)\b/g, TokenKind.LogicalOp],
 	[true, /^'s|its|of/g, TokenKind.PropertyAccess],
 	[true, /^bind|2bind/g, TokenKind.Binding],
 	[true, /^\[/g, TokenKind.HookOpen],
@@ -52,6 +60,68 @@ const tokenizer = buildLexer([
 	[false, /^\s+/g, TokenKind.Whitespace],
 	[true, /^[^\[\]\(\)$,\s]+/g, TokenKind.Text],
 ]);
+
+// Expression Rules
+const EXPRESSION = rule<TokenKind, any>();
+const COMPARATIVE_EXPR = rule<TokenKind, any>();
+const ARITHMETIC_EXPR = rule<TokenKind, any>();
+
+// Value parser with support for arithmetic expressions
+const VALUE = rule<TokenKind, any>();
+VALUE.setPattern(
+	alt(
+		apply(tok(TokenKind.StringLiteral), (t) => ({
+			type: "String",
+			value: t.text.slice(1, -1),
+		})),
+		apply(tok(TokenKind.Number), (t) => ({
+			type: "Number",
+			value: parseFloat(t.text),
+		})),
+		apply(tok(TokenKind.Boolean), (t) => ({
+			type: "Boolean",
+			value: t.text === "true",
+		})),
+		apply(tok(TokenKind.Variable), (t) => ({
+			type: "Variable",
+			name: t.text.slice(1),
+		})),
+		ARITHMETIC_EXPR
+	)
+);
+
+// Arithmetic expression parser
+ARITHMETIC_EXPR.setPattern(
+	apply(
+		seq(VALUE, opt(seq(tok(TokenKind.ArithmeticOp), VALUE))),
+		([left, rightOpt]) => {
+			if (!rightOpt) return left;
+			const [op, right] = rightOpt;
+			return {
+				type: "ArithmeticExpr",
+				operator: op.text,
+				left,
+				right,
+			};
+		}
+	)
+);
+
+// Comparative expression parser
+COMPARATIVE_EXPR.setPattern(
+	apply(
+		seq(VALUE, tok(TokenKind.ComparisonOp), VALUE),
+		([left, op, right]) => ({
+			type: "ComparisonExpr",
+			operator: op.text,
+			left,
+			right,
+		})
+	)
+);
+
+// Expression can be either comparative or value
+EXPRESSION.setPattern(alt(COMPARATIVE_EXPR, VALUE));
 
 const MACRO_ARG_PATTERNS = {
 	set: {
@@ -63,7 +133,7 @@ const MACRO_ARG_PATTERNS = {
 		keyword: TokenKind.Arrow,
 	},
 	if: {
-		pattern: ["Value"],
+		pattern: ["Expression"],
 		keyword: null,
 	},
 	print: {
@@ -93,39 +163,26 @@ function validateArgType(arg: any, expectedType: string): boolean {
 		case "StringLiteral":
 			return arg.type === "String";
 		case "Value":
-			return ["String", "Number", "Boolean", "Variable"].includes(
-				arg.type
-			);
+			return [
+				"String",
+				"Number",
+				"Boolean",
+				"Variable",
+				"ArithmeticExpr",
+			].includes(arg.type);
+		case "Expression":
+			return [
+				"String",
+				"Number",
+				"Boolean",
+				"Variable",
+				"ComparisonExpr",
+				"ArithmeticExpr",
+			].includes(arg.type);
 		default:
 			return true;
 	}
 }
-
-const VALUE = rule<TokenKind, any>();
-VALUE.setPattern(
-	alt(
-		apply(tok(TokenKind.StringLiteral), (t) => ({
-			type: "String",
-			value: t.text.slice(1, -1),
-		})),
-		apply(tok(TokenKind.Number), (t) => ({
-			type: "Number",
-			value: parseFloat(t.text),
-		})),
-		apply(tok(TokenKind.Boolean), (t) => ({
-			type: "Boolean",
-			value: t.text === "true",
-		})),
-		apply(tok(TokenKind.Variable), (t) => ({
-			type: "Variable",
-			name: t.text.slice(1),
-		})),
-		apply(tok(TokenKind.Text), (t) => ({
-			type: "Text",
-			content: t.text.trim(),
-		}))
-	)
-);
 
 const KEYWORD = rule<TokenKind, TokenKind>();
 KEYWORD.setPattern(
@@ -163,7 +220,7 @@ MACRO.setPattern(
 			tok(TokenKind.MacroName),
 			alt(
 				apply(STRUCTURED_ARG, (arg) => [arg]),
-				list_sc(VALUE, tok(TokenKind.Comma))
+				list_sc(EXPRESSION, tok(TokenKind.Comma))
 			),
 			tok(TokenKind.RParen),
 			opt(HOOK_CONTENT)
@@ -174,7 +231,6 @@ MACRO.setPattern(
 			const macroPattern = MACRO_ARG_PATTERNS[name];
 
 			if (!macroPattern) {
-				// Instead of throwing, return unknown macro
 				return {
 					type: "UnknownMacro",
 					name,
@@ -215,31 +271,11 @@ MACRO.setPattern(
 	)
 );
 
-// Expression can be either a macro or plain text
-const EXPRESSION = rule<TokenKind, any>();
-EXPRESSION.setPattern(
-	alt(
-		MACRO,
-		apply(VALUE, (value) => ({
-			type: "Text",
-			content: value,
-		}))
-	)
-);
-
-// Program is a sequence of expressions
 const PROGRAM = rule<TokenKind, any>();
 PROGRAM.setPattern(
-	apply(rep(EXPRESSION), (expressions) => ({
+	apply(rep(MACRO), (expressions) => ({
 		type: "Program",
-		expressions: expressions.filter(
-			(exp) =>
-				// Filter out empty text nodes
-				!(
-					exp.type === "Text" &&
-					(!exp.content || exp.content.content === "")
-				)
-		),
+		expressions: expressions.filter(Boolean),
 	}))
 );
 
