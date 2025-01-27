@@ -45,12 +45,9 @@ const tokenizer = buildLexer([
 	[true, /^(true|false)/g, TokenKind.Boolean],
 	[true, /^->/g, TokenKind.Arrow],
 	[true, /^to\b/g, TokenKind.To],
-	[
-		true,
-		/^(>=|<=|>|<|is not|is|contains|does not contain)\b/g,
-		TokenKind.ComparisonOp,
-	],
-	[true, /^(\+|\-|\*|\/)\b/g, TokenKind.ArithmeticOp],
+	[true, /^(>=|<=|>|<)/g, TokenKind.ComparisonOp], // Moved up and simplified
+	[true, /^(is not|is|contains|does not contain)\b/g, TokenKind.ComparisonOp],
+	[true, /^(\+|\-|\*|\/)/g, TokenKind.ArithmeticOp], // Removed \b
 	[true, /^(and|or)\b/g, TokenKind.LogicalOp],
 	[true, /^'s|its|of/g, TokenKind.PropertyAccess],
 	[true, /^bind|2bind/g, TokenKind.Binding],
@@ -58,7 +55,7 @@ const tokenizer = buildLexer([
 	[true, /^\]/g, TokenKind.HookClose],
 	[true, /^,/g, TokenKind.Comma],
 	[false, /^\s+/g, TokenKind.Whitespace],
-	[true, /^[^\[\]\(\)$,\s]+/g, TokenKind.Text],
+	[true, /^[^\[\]\(\)$,\s><="']+/g, TokenKind.Text], // Updated to exclude comparison chars
 ]);
 
 // Basic value types
@@ -210,19 +207,6 @@ MACRO.setPattern(
 					name,
 					rawContent: macroName.text,
 				};
-			}
-
-			// Validate keyword arguments if required
-			if (macroPattern.keyword) {
-				const arg = args[0];
-				if (
-					arg.type !== "KeywordArg" ||
-					arg.keyword !== macroPattern.keyword
-				) {
-					throw new Error(
-						`Macro ${name} requires keyword ${macroPattern.keyword}`
-					);
-				}
 			}
 
 			return {
