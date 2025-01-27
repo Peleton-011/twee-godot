@@ -20,6 +20,7 @@ enum TokenKind {
 	HookOpen,
 	HookClose,
 	StringLiteral,
+	Time,
 	Number,
 	Boolean,
 	Comma,
@@ -42,6 +43,7 @@ const tokenizer = buildLexer([
 	[true, /^\)/g, TokenKind.RParen],
 	[true, /^\$[a-zA-Z_][a-zA-Z0-9_-]*/g, TokenKind.Variable],
 	[true, /^\"[^\"]*\"/g, TokenKind.StringLiteral],
+	[true, /^\d+(\.\d+)?s\b/g, TokenKind.Time], // Add time unit pattern before number
 	[true, /^\d+(\.\d+)?/g, TokenKind.Number],
 	[true, /^(true|false)/g, TokenKind.Boolean],
 	[true, /^->/g, TokenKind.Arrow],
@@ -69,6 +71,10 @@ LITERAL.setPattern(
 			type: "String",
 			value: t.text.slice(1, -1),
 		})),
+		apply(tok(TokenKind.Time), (t) => ({
+			type: "Time",
+			value: t.text,
+		})),
 		apply(tok(TokenKind.Number), (t) => ({
 			type: "Number",
 			value: parseFloat(t.text),
@@ -81,6 +87,30 @@ LITERAL.setPattern(
 			type: "Variable",
 			name: t.text.slice(1),
 		}))
+	)
+);
+
+// Hook content now captures everything between brackets
+const HOOK_CONTENT = rule<TokenKind, any>();
+HOOK_CONTENT.setPattern(
+	apply(
+		seq(
+			tok(TokenKind.HookOpen),
+			rep(
+				alt(
+					apply(tok(TokenKind.Text), (t) => t.text),
+					apply(tok(TokenKind.Whitespace), (t) => t.text),
+					apply(tok(TokenKind.StringLiteral), (t) => t.text),
+					apply(tok(TokenKind.Variable), (t) => t.text)
+					// Add other token types that can appear in hook content
+				)
+			),
+			tok(TokenKind.HookClose)
+		),
+		([_, content, __]) => ({
+			type: "HookContent",
+			content: content.join(""),
+		})
 	)
 );
 
