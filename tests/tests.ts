@@ -38,6 +38,11 @@ const mainTests = [
     (history:)[You've visited (visited: "Room")]
     (print: "Your score is " + $score)
     `,
+	`Choose what to do
+    (link: "Next" -> "NextPassage")
+    [[ Back -> Home]]
+    [[ Outside ]]
+    `,
 ];
 
 const altTests = [
