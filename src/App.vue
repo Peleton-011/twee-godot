@@ -14,7 +14,7 @@ function updateHarloweCode(event: Event) {
 }
 
 function updateOutputJson() {
-	outputJson.value = parseHarlowe(harloweCode.value);
+	outputJson.value = JSON.stringify(parseHarlowe(harloweCode.value), null, 2);
 }
 // const parsedJSON = parseHarlowe(harloweCode);
 // console.log(JSON.stringify(parsedJSON, null, 2));
@@ -45,5 +45,8 @@ function updateOutputJson() {
 }
 .card {
 	display: flex;
+}
+#harloweOutput {
+	text-align: left;
 }
 </style>
