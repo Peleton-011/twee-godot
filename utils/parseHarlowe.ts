@@ -36,6 +36,8 @@ enum TokenKind {
 	Whitespace,
 	Text,
 	HookContent,
+	LinkOpen,
+	LinkClose,
 }
 
 const tokenizer = buildLexer([
@@ -60,6 +62,8 @@ const tokenizer = buildLexer([
 	[false, /^\s+/g, TokenKind.Whitespace],
 	[true, /^\[[^\]]*\]/g, TokenKind.HookContent],
 	[true, /^[^\[\]\(\)$,\s><="']+/g, TokenKind.Text],
+	[true, /^\[\[/g, TokenKind.LinkOpen],
+	[true, /^\]\]/g, TokenKind.LinkClose],
 ]);
 
 const LITERAL = rule<TokenKind, any>();
@@ -252,6 +256,37 @@ MACRO.setPattern(
 				pattern: macroPattern.pattern,
 				hookContent: hookContent || null,
 			};
+		}
+	)
+);
+
+// make a link parser following the syntax [[ Next -> NextPassage ]] or [[ NextPassage ]] which should be tokenized as a macro of type link
+
+const LINK = rule<TokenKind, any>();
+LINK.setPattern(
+	apply(
+		seq(
+			tok(TokenKind.LinkOpen),
+			alt(
+				seq(
+					tok(TokenKind.StringLiteral),
+					tok(TokenKind.Arrow),
+					tok(TokenKind.StringLiteral)
+				),
+				tok(TokenKind.StringLiteral)
+			),
+			tok(TokenKind.LinkClose)
+		),
+		([_, content, __]) => {
+			const left = Array.isArray(content) ? content[0] : content;
+			const right = Array.isArray(content) ? content[2] : content;
+			return ({
+				type: "Macro",
+                name: "link",
+                args: [left, right],
+				left,
+				right,
+			});
 		}
 	)
 );
